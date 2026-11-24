@@ -15,10 +15,14 @@ It runs on haus (Mac) from Hermes cron.
 - `python3 -m fbb.cli backup`: consistent SQLite snapshot to `~/Backups/fbb-assistant`, plus the
   `db-backups` GitHub release when `FBB_BACKUP_GH_REPO` is set.
 
+**Projection v1 (default since docs/model-v1.md)**: a linear model on point-in-time box-score
+features (EWMA form and minutes, rest, opponent, teammates out, games missed) read from `data/fbb.db`.
+It falls back to v0 per man without history, and entirely when the store is > 3 days stale.
+`FBB_MODEL=v0` forces v0. Backtest and gate: `docs/model-v1.md`.
+
 Projection v0 blends ESPN's season projection (0.5), the last 15 days (0.3) and the season to date
 (0.2). All three are ESPN `appliedAverage`, which is already in league points. Day-to-day men
-get x0.75, OUT men 0. This is a placeholder. The real model is the research track in
-`docs/research-plan.md`.
+get x0.75, OUT men 0. 
 
 ## Transport
 
