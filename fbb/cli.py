@@ -10,7 +10,10 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
+import os
+import sqlite3
 import sys
 import time
 
@@ -18,10 +21,13 @@ from . import db, espn
 from .consts import BENCH, IR, SLOTS
 from .lineup import Man, describe, moves_for, optimise, total
 from .project import project
+from .project_v1 import build_state, is_stale, load_model, project_v1
 
 SEASON = 2027
 LEAGUE = 211696
-MODEL = "v0-blend"
+# "v1" = fitted box-score model (docs/model-v1.md), falling back to v0 per man when it has no features;
+# "v0" = the ESPN/last-15/season blend. FBB_MODEL=v0 forces the old projector.
+MODEL = os.environ.get("FBB_MODEL", "v1")
 
 
 def load_day(period: int | None):
@@ -37,7 +43,33 @@ def load_day(period: int | None):
     return lg, team, games, period
 
 
-def build_men(team, games, now_ms: int) -> list[Man]:
+def game_date_et(games: dict, now_ms: int) -> str:
+    """US (Eastern) calendar date of the scoring period's games."""
+    from zoneinfo import ZoneInfo
+    ms = next((g["date"] for g in games.values() if g.get("date")), now_ms)
+    return dt.datetime.fromtimestamp(ms / 1000, ZoneInfo("America/New_York")).date().isoformat()
+
+
+def v1_context(games: dict, now_ms: int):
+    """(builder, model, date) for v1, or (None, None, date) when v1 can't run (no model / stale store)."""
+    date = game_date_et(games, now_ms)
+    if MODEL != "v1":
+        return None, None, date
+    model = load_model()
+    if model is None:
+        return None, None, date
+    try:
+        con = sqlite3.connect(f"file:{db.DB_PATH}?mode=ro", uri=True, timeout=120)
+        builder, last = build_state(con, date)
+    except sqlite3.Error:
+        return None, None, date
+    if is_stale(last, date):
+        return None, None, date
+    return builder, model, date
+
+
+def build_men(team, games, now_ms: int, v1=None) -> list[Man]:
+    builder, model, date = v1 or (None, None, None)
     men = []
     for e in team["roster"]["entries"]:
         ppe = e["playerPoolEntry"]
@@ -45,7 +77,18 @@ def build_men(team, games, now_ms: int) -> list[Man]:
         g = games.get(p.get("proTeamId"))
         started = bool(g and g.get("date", 0) <= now_ms)
         inj = p.get("injuryStatus") or e.get("injuryStatus")
-        val, note, inputs = project(p, SEASON, g is not None, inj)
+        res = None
+        if builder is not None and g is not None:
+            tid = p.get("proTeamId")
+            home = g.get("homeProTeamId") == tid
+            opp = g.get("awayProTeamId") if home else g.get("homeProTeamId")
+            res = project_v1(builder, model, p["id"], tid, opp, home, date, True, inj)
+        if res is not None:
+            val, note, inputs = res
+            inputs["model"] = "v1"
+        else:
+            val, note, inputs = project(p, SEASON, g is not None, inj)
+            inputs["model"] = "v0"
         men.append(Man(pid=p["id"], name=p["fullName"], slot=e["lineupSlotId"], eligible=p.get("eligibleSlots") or [],
                        locked=bool(ppe.get("lineupLocked")) or started, value=round(val, 2), has_game=g is not None,
                        note=note, extra={"inj": inj, "inputs": inputs}))
@@ -57,7 +100,9 @@ def cmd_lineup(a) -> int:
     lg, team, games, period = load_day(a.period)
     db.snapshot(con, "league_roster", {"settings": lg["settings"]["rosterSettings"], "team": team}, SEASON, LEAGUE, period)
     counts = lg["settings"]["rosterSettings"]["lineupSlotCounts"]
-    men = build_men(team, games, int(time.time() * 1000))
+    now_ms = int(time.time() * 1000)
+    men = build_men(team, games, now_ms, v1_context(games, now_ms))
+    model = "v1" if any(m.extra["inputs"].get("model") == "v1" for m in men) else "v0-blend"
     target = optimise(men, counts)
     moves = moves_for(men, target)
     before = {m.pid: m.slot for m in men}
@@ -70,7 +115,7 @@ def cmd_lineup(a) -> int:
         verified = all(now_slots.get(pid) == s for pid, s in target.items())
     cur = con.execute(
         "INSERT INTO lineup_decision(decided_at,season,league_id,team_id,scoring_period,model,projected_before,projected_after,moves,sent,status,response,detail) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        (db.now(), SEASON, LEAGUE, team["id"], period, MODEL, t0, t1, json.dumps(moves), int(bool(moves and a.send)),
+        (db.now(), SEASON, LEAGUE, team["id"], period, model, t0, t1, json.dumps(moves), int(bool(moves and a.send)),
          status, (resp or "")[:4000], json.dumps({"verified": verified})))
     did = cur.lastrowid
     con.executemany("INSERT INTO player_day_projection VALUES (?,?,?,?,?,?,?,?,?,?,?)",
@@ -82,7 +127,7 @@ def cmd_lineup(a) -> int:
         return 0
     n_games = sum(1 for m in men if m.has_game and m.slot != IR)
     print(f"Barchskitball lineup, scoring period {period}: {n_games} of our men play today. "
-          f"Projected {t0:.1f} -> {t1:.1f} pts ({MODEL}).")
+          f"Projected {t0:.1f} -> {t1:.1f} pts ({model}).")
     by = {m.pid: m for m in men}
     for mv in moves:
         m = by[mv["playerId"]]
