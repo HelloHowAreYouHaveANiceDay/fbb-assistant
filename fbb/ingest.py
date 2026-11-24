@@ -92,6 +92,8 @@ def ingest_day(con, day: dt.date) -> tuple[int, int]:
     sb = _get(f"{SITE}/scoreboard?dates={day:%Y%m%d}&limit=50")
     n_games = n_rows = 0
     for ev in sb.get("events") or []:
+        if not str(ev.get("id", "")).isdigit() or not ev.get("competitions"):
+            continue                       # placeholder/odd scoreboard entries (seen in 2007)
         gid = int(ev["id"])
         comp = ev["competitions"][0]
         final = int(comp["status"]["type"].get("completed", False))
@@ -128,7 +130,11 @@ def main(argv=None):
     d, end = dt.date.fromisoformat(a.start), dt.date.fromisoformat(a.end)
     tg = tr = 0
     while d <= end:
-        g, r = ingest_day(con, d)
+        try:
+            g, r = ingest_day(con, d)
+        except Exception as e:             # one bad day must not stop a 20-season load
+            print(f"{d}: FAILED {str(e)[:100]}", flush=True)
+            g, r = 0, 0
         tg, tr = tg + g, tr + r
         if g:
             print(f"{d}: {g} games, {r} player rows", flush=True)
