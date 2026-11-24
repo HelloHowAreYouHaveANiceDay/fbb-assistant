@@ -33,7 +33,7 @@ def now() -> str:
 
 def connect(path: pathlib.Path | str = DB_PATH) -> sqlite3.Connection:
     pathlib.Path(path).parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(path)
+    con = sqlite3.connect(path, timeout=120)
     con.execute("PRAGMA journal_mode=WAL")
     con.executescript(SCHEMA)
     return con

@@ -70,7 +70,9 @@ def parse_summary(gid: int, s: dict) -> list[tuple]:
         st = side["statistics"][0]
         keys = st.get("keys") or []
         for a in st.get("athletes") or []:
-            ath = a["athlete"]
+            ath = a.get("athlete") or {}
+            if not ath.get("id"):          # exhibition opponents (international clubs) carry no athlete id
+                continue
             vals = dict(zip(keys, a.get("stats") or []))
             dnp = int(bool(a.get("didNotPlay")) or not a.get("stats"))
             fgm, fga = _split(vals.get("fieldGoalsMade-fieldGoalsAttempted", ""))
