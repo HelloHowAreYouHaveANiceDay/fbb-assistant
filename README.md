@@ -15,6 +15,8 @@ It runs on haus (Mac) from Hermes cron.
 - `python3 -m fbb.cli backup`: consistent SQLite snapshot to `~/Backups/fbb-assistant`, plus the
   `db-backups` GitHub release when `FBB_BACKUP_GH_REPO` is set.
 
+**Projection v2 (docs/model-v2.md) did not pass its gate and is not wired in.**
+
 **Projection v1 (default since docs/model-v1.md)**: a linear model on point-in-time box-score
 features (EWMA form and minutes, rest, opponent, teammates out, games missed) read from `data/fbb.db`.
 It falls back to v0 per man without history, and entirely when the store is > 3 days stale.
