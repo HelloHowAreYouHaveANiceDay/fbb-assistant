@@ -104,7 +104,12 @@ def ingest_day(con, day: dt.date) -> tuple[int, int]:
                      int(cs["home"]["team"]["id"]), int(cs["away"]["team"]["id"]), _int(cs["home"].get("score")),
                      _int(cs["away"].get("score")), final, db.now()))
         if final:
-            rows = parse_summary(gid, _get(f"{SITE}/summary?event={gid}"))
+            try:
+                rows = parse_summary(gid, _get(f"{SITE}/summary?event={gid}"))
+            except Exception as e:  # a missing/odd summary must not stop a multi-season load
+                print(f"  skip game {gid} ({day}): {str(e)[:80]}", flush=True)
+                con.execute("UPDATE game SET final=0 WHERE game_id=?", (gid,))
+                continue
             con.executemany("INSERT OR REPLACE INTO player_game VALUES (" + ",".join("?" * 26) + ")", rows)
             n_rows += len(rows)
         n_games += 1
