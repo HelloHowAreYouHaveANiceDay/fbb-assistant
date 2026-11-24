@@ -101,9 +101,35 @@ def cmd_lineup(a) -> int:
     return 0
 
 
+def cmd_snapshot_players(a) -> int:
+    """Point-in-time ESPN view of the top-N players (season projection + actual splits, ownership).
+    One row per day is the ESPN baseline any model of ours is measured against."""
+    con = db.connect()
+    flt = {"players": {"limit": a.limit, "sortPercOwned": {"sortPriority": 1, "sortAsc": False},
+                       "filterStatsForTopScoringPeriodIds": {"value": 2, "additionalValue": [
+                           f"00{SEASON}", f"10{SEASON}", f"01{SEASON}", f"02{SEASON}", f"03{SEASON}"]}}}
+    lg = espn.league(SEASON, LEAGUE, ["mSettings"])
+    period = lg["scoringPeriodId"]
+    d = espn.get(f"{espn.READS}/seasons/{SEASON}/segments/0/leagues/{LEAGUE}?view=kona_player_info&scoringPeriodId={period}",
+                 headers={"x-fantasy-filter": json.dumps(flt)})
+    slim = [{"id": p["player"]["id"], "name": p["player"]["fullName"], "proTeamId": p["player"].get("proTeamId"),
+             "onTeamId": p.get("onTeamId"), "status": p.get("status"), "injury": p["player"].get("injuryStatus"),
+             "eligible": p["player"].get("eligibleSlots"), "own": (p["player"].get("ownership") or {}).get("percentOwned"),
+             "stats": [{k: s.get(k) for k in ("id", "statSourceId", "statSplitTypeId", "scoringPeriodId", "appliedTotal",
+                                                "appliedAverage", "stats")} for s in p["player"].get("stats") or []]}
+            for p in d["players"]]
+    sid = db.snapshot(con, "players_top", slim, SEASON, LEAGUE, period)
+    if not a.quiet:
+        print(f"snapshot {sid}: {len(slim)} players, period {period}")
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="fbb")
     sub = ap.add_subparsers(dest="cmd", required=True)
+    sp = sub.add_parser("snapshot-players")
+    sp.add_argument("--limit", type=int, default=500)
+    sp.add_argument("--quiet", action="store_true")
     p = sub.add_parser("lineup")
     p.add_argument("--period", type=int)
     p.add_argument("--send", action="store_true")
@@ -114,6 +140,8 @@ def main(argv=None) -> int:
     try:
         if a.cmd == "lineup":
             return cmd_lineup(a)
+        if a.cmd == "snapshot-players":
+            return cmd_snapshot_players(a)
         if a.cmd == "backup":
             from .backup import backup
             print(backup())
